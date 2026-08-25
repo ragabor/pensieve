@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatFooter } from "../src/footer.js";
+import { formatFooter } from "../src/footer.ts";
 
 describe("footer status", () => {
   test("is absent when the stack is empty", () => {

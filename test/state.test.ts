@@ -8,7 +8,7 @@ import {
   popDraft,
   pushDraft,
   type StateHost,
-} from "../src/state.js";
+} from "../src/state.ts";
 
 describe("process state", () => {
   test("starts empty and reuses state from the same host", () => {

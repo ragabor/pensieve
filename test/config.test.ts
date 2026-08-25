@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { isShortcut, loadShortcuts } from "../src/config.js";
+import { isShortcut, loadShortcuts } from "../src/config.ts";
 
 describe("shortcut validation", () => {
   test.each(["ctrl+s", "SHIFT+CTRL+P", "alt+enter", "f12", "ctrl++"])("accepts %s", (shortcut) => {
