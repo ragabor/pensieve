@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { isShortcut, loadShortcuts } from "../src/config.ts";
 
 describe("shortcut validation", () => {
-  test.each(["ctrl+s", "SHIFT+CTRL+P", "alt+enter", "f12", "ctrl++"])("accepts %s", (shortcut) => {
+  test.each(["ctrl+s", "SHIFT+CTRL+P", "alt+enter", "f12"])("accepts %s", (shortcut) => {
     expect(isShortcut(shortcut.toLowerCase())).toBeTrue();
   });
 
-  test.each(["", "ctrl+", "ctrl+ctrl+s", "hyper+s", "f13", "ctrl+not-a-key"])(
+  test.each(["", "+", "ctrl+", "ctrl++", "ctrl+ctrl+s", "hyper+s", "f13", "ctrl+not-a-key"])(
     "rejects %s",
     (shortcut) => {
       expect(isShortcut(shortcut)).toBeFalse();

@@ -3,20 +3,38 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionEvent,
+} from "@earendil-works/pi-coding-agent";
 
 import pensieve from "../index.ts";
 import { draftCount, getPensieveState, peekDraft, pushDraft } from "../src/state.ts";
 
-type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+type PensieveEventType =
+  | "session_start"
+  | "input"
+  | "before_agent_start"
+  | "session_before_compact"
+  | "model_select"
+  | "session_shutdown"
+  | "session_before_switch"
+  | "session_before_fork";
+type PensieveEvent = Extract<ExtensionEvent, { type: PensieveEventType }>;
+type EventFor<T extends PensieveEventType> = Extract<PensieveEvent, { type: T }>;
+type EventHandler<T extends PensieveEventType> = (
+  event: EventFor<T>,
+  ctx: ExtensionContext,
+) => unknown;
 type ShortcutHandler = (ctx: ExtensionContext) => Promise<void> | void;
 
 class FakePi {
-  readonly eventHandlers = new Map<string, EventHandler[]>();
+  readonly eventHandlers = new Map<PensieveEventType, unknown[]>();
   readonly shortcuts = new Map<string, ShortcutHandler>();
   commandRegistrations = 0;
 
-  on(event: string, handler: EventHandler): void {
+  on<T extends PensieveEventType>(event: T, handler: EventHandler<T>): void {
     const handlers = this.eventHandlers.get(event) ?? [];
     handlers.push(handler);
     this.eventHandlers.set(event, handlers);
@@ -30,11 +48,12 @@ class FakePi {
     this.commandRegistrations += 1;
   }
 
-  async emit(
-    event: { readonly type: string; readonly [key: string]: unknown },
+  async emit<T extends PensieveEventType>(
+    event: EventFor<T>,
     ctx: ExtensionContext,
   ): Promise<void> {
-    for (const handler of this.eventHandlers.get(event.type) ?? []) {
+    for (const registered of this.eventHandlers.get(event.type) ?? []) {
+      const handler = registered as EventHandler<T>;
       await handler(event, ctx);
     }
   }
@@ -112,6 +131,45 @@ function install(pi: FakePi): void {
 
 function latestStatus(context: TestContext): string | undefined {
   return context.statuses.at(-1)?.text;
+}
+
+function inputEvent(
+  source: EventFor<"input">["source"] = "interactive",
+  streamingBehavior?: EventFor<"input">["streamingBehavior"],
+): EventFor<"input"> {
+  const base = { type: "input" as const, text: "submitted", source };
+  return streamingBehavior === undefined ? base : { ...base, streamingBehavior };
+}
+
+function beforeAgentStartEvent(): EventFor<"before_agent_start"> {
+  return {
+    type: "before_agent_start",
+    prompt: "submitted",
+    systemPrompt: "system",
+    systemPromptOptions: {} as EventFor<"before_agent_start">["systemPromptOptions"],
+  };
+}
+
+function compactEvent(
+  reason: EventFor<"session_before_compact">["reason"],
+): EventFor<"session_before_compact"> {
+  return {
+    type: "session_before_compact",
+    preparation: {} as EventFor<"session_before_compact">["preparation"],
+    branchEntries: [],
+    reason,
+    willRetry: false,
+    signal: new AbortController().signal,
+  };
+}
+
+function modelSelectEvent(source: EventFor<"model_select">["source"]): EventFor<"model_select"> {
+  return {
+    type: "model_select",
+    model: {} as EventFor<"model_select">["model"],
+    previousModel: undefined,
+    source,
+  };
 }
 
 async function expectFailure(action: Promise<void>, message: string): Promise<void> {
@@ -270,12 +328,7 @@ describe("automatic restoration", () => {
       const context = createContext();
       install(pi);
       pushDraft(getPensieveState(), "draft");
-      const event =
-        streamingBehavior === undefined
-          ? { type: "input", source: "interactive" }
-          : { type: "input", source: "interactive", streamingBehavior };
-
-      await pi.emit(event, context.ctx);
+      await pi.emit(inputEvent("interactive", streamingBehavior), context.ctx);
 
       expect(context.editorText).toBe("draft");
       expect(draftCount(getPensieveState())).toBe(0);
@@ -288,8 +341,8 @@ describe("automatic restoration", () => {
     install(pi);
     pushDraft(getPensieveState(), "draft");
 
-    await pi.emit({ type: "input", source: "rpc" }, context.ctx);
-    await pi.emit({ type: "input", source: "extension" }, context.ctx);
+    await pi.emit(inputEvent("rpc"), context.ctx);
+    await pi.emit(inputEvent("extension"), context.ctx);
 
     expect(context.editorText).toBe("");
     expect(peekDraft(getPensieveState())).toBe("draft");
@@ -303,12 +356,12 @@ describe("automatic restoration", () => {
     context.editorText = "inner";
     await pi.press("ctrl+s", context.ctx);
 
-    await pi.emit({ type: "input", source: "interactive" }, context.ctx);
+    await pi.emit(inputEvent(), context.ctx);
     expect(context.editorText).toBe("inner");
     expect(peekDraft(getPensieveState())).toBe("outer");
 
     context.editorText = "";
-    await pi.emit({ type: "input", source: "interactive" }, context.ctx);
+    await pi.emit(inputEvent(), context.ctx);
     expect(context.editorText).toBe("outer");
     expect(draftCount(getPensieveState())).toBe(0);
   });
@@ -320,8 +373,8 @@ describe("automatic restoration", () => {
     pushDraft(getPensieveState(), "outer");
     pushDraft(getPensieveState(), "inner");
 
-    await pi.emit({ type: "input", source: "interactive" }, context.ctx);
-    await pi.emit({ type: "before_agent_start" }, context.ctx);
+    await pi.emit(inputEvent(), context.ctx);
+    await pi.emit(beforeAgentStartEvent(), context.ctx);
 
     expect(context.editorText).toBe("inner");
     expect(peekDraft(getPensieveState())).toBe("outer");
@@ -333,7 +386,7 @@ describe("automatic restoration", () => {
     install(pi);
     pushDraft(getPensieveState(), "draft");
 
-    await pi.emit({ type: "input", source: "interactive" }, context.ctx);
+    await pi.emit(inputEvent(), context.ctx);
 
     expect(context.editorText).toBe("current work");
     expect(peekDraft(getPensieveState())).toBe("draft");
@@ -347,22 +400,22 @@ describe("command and session lifecycle", () => {
     install(pi);
     pushDraft(getPensieveState(), "draft");
 
-    await pi.emit({ type: "session_before_compact", reason: "threshold" }, context.ctx);
+    await pi.emit(compactEvent("threshold"), context.ctx);
     expect(context.editorText).toBe("");
-    await pi.emit({ type: "session_before_compact", reason: "manual" }, context.ctx);
+    await pi.emit(compactEvent("manual"), context.ctx);
 
     expect(context.editorText).toBe("draft");
   });
 
-  test("restores for user model changes but not startup restoration", async () => {
+  test("restores for a first user model selection but not startup restoration", async () => {
     const pi = new FakePi();
     const context = createContext();
     install(pi);
     pushDraft(getPensieveState(), "draft");
 
-    await pi.emit({ type: "model_select", source: "restore" }, context.ctx);
+    await pi.emit(modelSelectEvent("restore"), context.ctx);
     expect(context.editorText).toBe("");
-    await pi.emit({ type: "model_select", source: "set", previousModel: {} }, context.ctx);
+    await pi.emit(modelSelectEvent("set"), context.ctx);
 
     expect(context.editorText).toBe("draft");
   });
@@ -382,15 +435,14 @@ describe("command and session lifecycle", () => {
     expect(context.editorText).toBe("draft");
   });
 
-  test("session navigation and unsupported events leave the stack pending", async () => {
+  test("session navigation leaves the stack pending", async () => {
     const pi = new FakePi();
     const context = createContext();
     install(pi);
     pushDraft(getPensieveState(), "draft");
 
     await pi.emit({ type: "session_before_switch", reason: "new" }, context.ctx);
-    await pi.emit({ type: "session_before_fork", entryId: "entry" }, context.ctx);
-    await pi.emit({ type: "unsupported_command" }, context.ctx);
+    await pi.emit({ type: "session_before_fork", entryId: "entry", position: "at" }, context.ctx);
 
     expect(context.editorText).toBe("");
     expect(peekDraft(getPensieveState())).toBe("draft");

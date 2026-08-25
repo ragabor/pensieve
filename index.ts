@@ -92,7 +92,7 @@ export default function pensieve(pi: ExtensionAPI): void {
   });
 
   pi.on("model_select", (event, ctx) => {
-    if (event.source !== "restore" && event.previousModel !== undefined) {
+    if (event.source !== "restore") {
       restore(ctx);
     }
   });

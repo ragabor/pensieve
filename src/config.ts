@@ -47,7 +47,6 @@ const SYMBOL_KEYS = new Set([
   "(",
   ")",
   "_",
-  "+",
   "|",
   "~",
   "{",
@@ -73,20 +72,8 @@ function isKey(value: string): boolean {
 }
 
 export function isShortcut(value: string): boolean {
-  let parts: string[];
-  let key: string | undefined;
-
-  if (value === "+") {
-    parts = [];
-    key = "+";
-  } else if (value.endsWith("++")) {
-    parts = value.slice(0, -2).split("+");
-    key = "+";
-  } else {
-    parts = value.split("+");
-    key = parts.pop();
-  }
-
+  const parts = value.split("+");
+  const key = parts.pop();
   if (key === undefined || !isKey(key)) {
     return false;
   }
