@@ -4,7 +4,7 @@
   "description": "A process-memory prompt stack for Pi",
   "private": true,
   "type": "module",
-  "license": "WTFPL",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": [
     "pi-package"
   ],
@@ -47,10 +47,11 @@
     "@eslint/js": "10.0.1",
     "@types/bun": "1.4.0",
     "@types/node": "26.3.0",
+    "@typescript/native": "npm:typescript@7.0.2",
     "eslint": "10.9.1",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",
-    "typescript": "5.9.3",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "8.68.0"
   }
 }

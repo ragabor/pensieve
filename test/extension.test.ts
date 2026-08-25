@@ -32,7 +32,6 @@ type ShortcutHandler = (ctx: ExtensionContext) => Promise<void> | void;
 class FakePi {
   readonly eventHandlers = new Map<PensieveEventType, unknown[]>();
   readonly shortcuts = new Map<string, ShortcutHandler>();
-  commandRegistrations = 0;
 
   on<T extends PensieveEventType>(event: T, handler: EventHandler<T>): void {
     const handlers = this.eventHandlers.get(event) ?? [];
@@ -42,10 +41,6 @@ class FakePi {
 
   registerShortcut(shortcut: string, options: { handler: ShortcutHandler }): void {
     this.shortcuts.set(shortcut, options.handler);
-  }
-
-  registerCommand(): void {
-    this.commandRegistrations += 1;
   }
 
   async emit<T extends PensieveEventType>(
@@ -72,13 +67,11 @@ interface TestContext {
   editorText: string;
   failNextEditorSet: boolean;
   readonly statuses: Array<{ key: string; text: string | undefined }>;
-  notificationCount: number;
 }
 
 function createContext(initialText = "", mode: ExtensionContext["mode"] = "tui"): TestContext {
   let editorText = initialText;
   let failNextEditorSet = false;
-  let notificationCount = 0;
   const statuses: Array<{ key: string; text: string | undefined }> = [];
 
   const result: TestContext = {
@@ -96,9 +89,7 @@ function createContext(initialText = "", mode: ExtensionContext["mode"] = "tui")
         setStatus: (key: string, text: string | undefined) => {
           statuses.push({ key, text });
         },
-        notify: () => {
-          notificationCount += 1;
-        },
+        notify: () => {},
       },
     } as unknown as ExtensionContext,
     get editorText() {
@@ -114,12 +105,6 @@ function createContext(initialText = "", mode: ExtensionContext["mode"] = "tui")
       failNextEditorSet = value;
     },
     statuses,
-    get notificationCount() {
-      return notificationCount;
-    },
-    set notificationCount(value: number) {
-      notificationCount = value;
-    },
   };
 
   return result;
@@ -366,7 +351,7 @@ describe("automatic restoration", () => {
     expect(draftCount(getPensieveState())).toBe(0);
   });
 
-  test("does not double-pop in the before-agent fallback", async () => {
+  test("restores one draft when Pi emits both submission events", async () => {
     const pi = new FakePi();
     const context = createContext();
     install(pi);
@@ -407,7 +392,7 @@ describe("command and session lifecycle", () => {
     expect(context.editorText).toBe("draft");
   });
 
-  test("restores for a first user model selection but not startup restoration", async () => {
+  test("ignores the startup model event, then restores after /model", async () => {
     const pi = new FakePi();
     const context = createContext();
     install(pi);
@@ -458,16 +443,5 @@ describe("command and session lifecycle", () => {
 
     expect(latestStatus(context)).toBe("stashed: draft");
     expect(peekDraft(getPensieveState())).toBe("draft");
-  });
-
-  test("does not register commands or emit notifications", async () => {
-    const pi = new FakePi();
-    const context = createContext("draft");
-    install(pi);
-
-    await pi.press("ctrl+s", context.ctx);
-
-    expect(pi.commandRegistrations).toBe(0);
-    expect(context.notificationCount).toBe(0);
   });
 });

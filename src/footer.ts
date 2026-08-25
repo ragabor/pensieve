@@ -1,14 +1,10 @@
 const DEFAULT_PREVIEW_LENGTH = 48;
 
-function previewLine(text: string): string {
+function previewLine(text: string, maxLength: number): string {
   const line = text.split(/\r?\n/u).find((candidate) => candidate.trim().length > 0) ?? "";
-  return line.trim().replace(/\s+/gu, " ");
-}
-
-function truncate(text: string, maxLength: number): string {
-  const characters = Array.from(text);
+  const characters = Array.from(line.trim().replace(/\s+/gu, " "));
   if (characters.length <= maxLength) {
-    return text;
+    return characters.join("");
   }
 
   if (maxLength <= 1) {
@@ -27,7 +23,7 @@ export function formatFooter(
     return undefined;
   }
 
-  const preview = truncate(previewLine(newest), maxPreviewLength);
+  const preview = previewLine(newest, maxPreviewLength);
   const olderCount = drafts.length - 1;
   return `stashed: ${preview}${olderCount > 0 ? ` (+${olderCount})` : ""}`;
 }

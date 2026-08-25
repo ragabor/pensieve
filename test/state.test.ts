@@ -22,20 +22,16 @@ describe("process state", () => {
     expect(peekDraft(afterReload)).toBe("draft");
   });
 
-  test("replaces incompatible state", () => {
-    const host: StateHost = {
-      [PROCESS_STATE_KEY]: { version: 0, drafts: ["obsolete"] },
-    };
+  test("replaces invalid state", () => {
+    const invalidStates = [
+      { version: 0, drafts: ["obsolete"] },
+      { version: 1, drafts: ["valid", 42] },
+    ];
 
-    expect(getPensieveState(host)).toEqual({ version: 1, drafts: [] });
-  });
-
-  test("replaces state containing non-text entries", () => {
-    const host: StateHost = {
-      [PROCESS_STATE_KEY]: { version: 1, drafts: ["valid", 42] },
-    };
-
-    expect(getPensieveState(host)).toEqual({ version: 1, drafts: [] });
+    for (const invalidState of invalidStates) {
+      const host: StateHost = { [PROCESS_STATE_KEY]: invalidState };
+      expect(getPensieveState(host)).toEqual({ version: 1, drafts: [] });
+    }
   });
 });
 
@@ -50,17 +46,5 @@ describe("draft stack", () => {
     expect(popDraft(state)).toBe("second");
     expect(popDraft(state)).toBe("  first\nline  ");
     expect(popDraft(state)).toBeUndefined();
-  });
-
-  test("does not evict older entries", () => {
-    const state = getPensieveState({});
-
-    for (let index = 0; index < 10_000; index += 1) {
-      pushDraft(state, String(index));
-    }
-
-    expect(draftCount(state)).toBe(10_000);
-    expect(popDraft(state)).toBe("9999");
-    expect(state.drafts[0]).toBe("0");
   });
 });

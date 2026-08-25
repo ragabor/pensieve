@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { isShortcut, loadShortcuts } from "../src/config.ts";
+import { isShortcut, loadShortcuts } from "../src/shortcuts.ts";
 
 describe("shortcut validation", () => {
-  test.each(["ctrl+s", "SHIFT+CTRL+P", "alt+enter", "f12"])("accepts %s", (shortcut) => {
-    expect(isShortcut(shortcut.toLowerCase())).toBeTrue();
-  });
+  test.each(["ctrl+s", "SHIFT+CTRL+P", "alt+enter", "f12", "shift+pageUp"])(
+    "accepts %s",
+    (shortcut) => {
+      expect(isShortcut(shortcut)).toBeTrue();
+    },
+  );
 
   test.each(["", "+", "ctrl+", "ctrl++", "ctrl+ctrl+s", "hyper+s", "f13", "ctrl+not-a-key"])(
     "rejects %s",
@@ -46,11 +49,11 @@ describe("shortcut configuration", () => {
     const shortcuts = loadShortcuts({
       readText: () =>
         JSON.stringify({
-          "pensieve.shortcut": ["CTRL+S", " ctrl+s ", "alt+s", "hyper+s", 42],
+          "pensieve.shortcut": ["CTRL+S", " ctrl+s ", "alt+s", "shift+PAGEUP", "hyper+s", 42],
         }),
     });
 
-    expect(shortcuts).toEqual(["ctrl+s", "alt+s"]);
+    expect(shortcuts).toEqual(["ctrl+s", "alt+s", "shift+pageUp"]);
   });
 
   test.each([
