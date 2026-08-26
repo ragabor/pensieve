@@ -1,14 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  PROCESS_STATE_KEY,
-  draftCount,
-  getPensieveState,
-  peekDraft,
-  popDraft,
-  pushDraft,
-  type StateHost,
-} from "../src/state.ts";
+import { PROCESS_STATE_KEY, getPensieveState, pushDraft, type StateHost } from "../src/state.ts";
 
 describe("process state", () => {
   test("starts empty and reuses state from the same host", () => {
@@ -19,7 +11,7 @@ describe("process state", () => {
     const afterReload = getPensieveState(host);
 
     expect(afterReload).toBe(first);
-    expect(peekDraft(afterReload)).toBe("draft");
+    expect(afterReload.drafts).toEqual(["draft"]);
   });
 
   test("replaces invalid state", () => {
@@ -32,19 +24,5 @@ describe("process state", () => {
       const host: StateHost = { [PROCESS_STATE_KEY]: invalidState };
       expect(getPensieveState(host)).toEqual({ version: 1, drafts: [] });
     }
-  });
-});
-
-describe("draft stack", () => {
-  test("preserves exact text and pops in LIFO order", () => {
-    const state = getPensieveState({});
-    pushDraft(state, "  first\nline  ");
-    pushDraft(state, "second");
-
-    expect(draftCount(state)).toBe(2);
-    expect(peekDraft(state)).toBe("second");
-    expect(popDraft(state)).toBe("second");
-    expect(popDraft(state)).toBe("  first\nline  ");
-    expect(popDraft(state)).toBeUndefined();
   });
 });

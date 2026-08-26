@@ -1,103 +1,126 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionEvent } from "@earendil-works/pi-coding-agent";
 
-import { formatFooter } from "./src/footer.ts";
-import { loadShortcuts } from "./src/shortcuts.ts";
 import {
-  getPensieveState,
-  peekDraft,
-  popDraft,
-  pushDraft,
-  type PensieveState,
-} from "./src/state.ts";
+  createDraftRestorationPolicy,
+  type DraftRestorationPolicy,
+  type RestorationTrigger,
+} from "./src/restoration-policy.ts";
+import { loadShortcuts } from "./src/shortcuts.ts";
+import { getPensieveState } from "./src/state.ts";
 
-const STATUS_KEY = "pensieve";
 const INSTALLED_KEY = Symbol.for("@ragabor/pensieve/installed/v1");
 
 type Shortcut = Parameters<ExtensionAPI["registerShortcut"]>[0];
 type InstallableExtensionAPI = ExtensionAPI & { [INSTALLED_KEY]?: true };
+type PensieveEventType = "input" | "session_before_compact" | "model_select" | "session_shutdown";
+type PensieveEvent = Extract<ExtensionEvent, { type: PensieveEventType }>;
+type EventFor<T extends PensieveEventType> = Extract<PensieveEvent, { type: T }>;
+type TriggerFor<T extends RestorationTrigger["kind"]> = Extract<RestorationTrigger, { kind: T }>;
 
-/** Updates the footer to show the newest stashed draft. */
-function updateFooter(state: PensieveState, ctx: ExtensionContext): void {
-  if (ctx.mode !== "tui") {
-    return;
-  }
-
-  ctx.ui.setStatus(STATUS_KEY, formatFooter(state.drafts));
+function assertNever(value: never): never {
+  throw new Error(`Unknown Pi event value: ${String(value)}`);
 }
 
-/** Restores the newest draft without overwriting a nonempty editor. */
-function restore(state: PensieveState, ctx: ExtensionContext): boolean {
-  if (ctx.mode !== "tui" || ctx.ui.getEditorText().trim().length > 0) {
-    return false;
+function inputOrigin(
+  source: EventFor<"input">["source"],
+): TriggerFor<"prompt-submitted">["origin"] {
+  switch (source) {
+    case "interactive":
+      return "person";
+    case "rpc":
+    case "extension":
+      return "other";
+    default:
+      return assertNever(source);
   }
-
-  const draft = peekDraft(state);
-  if (draft === undefined) {
-    updateFooter(state, ctx);
-    return false;
-  }
-
-  ctx.ui.setEditorText(draft);
-  popDraft(state);
-  updateFooter(state, ctx);
-  return true;
 }
 
-/** Stashes the current prompt, or restores a draft when the editor is empty. */
-function stashOrRestore(state: PensieveState, ctx: ExtensionContext): void {
-  if (ctx.mode !== "tui") {
-    return;
+function compactionInitiation(
+  reason: EventFor<"session_before_compact">["reason"],
+): TriggerFor<"compaction">["initiation"] {
+  switch (reason) {
+    case "manual":
+      return "manual";
+    case "threshold":
+    case "overflow":
+      return "automatic";
+    default:
+      return assertNever(reason);
   }
-
-  const editorText = ctx.ui.getEditorText();
-  if (editorText.trim().length === 0) {
-    restore(state, ctx);
-    return;
-  }
-
-  ctx.ui.setEditorText("");
-  pushDraft(state, editorText);
-  updateFooter(state, ctx);
 }
 
-function registerHandlers(pi: ExtensionAPI, state: PensieveState): void {
+function modelSelectionPhase(
+  source: EventFor<"model_select">["source"],
+): TriggerFor<"model-selection">["phase"] {
+  switch (source) {
+    case "restore":
+      return "startup";
+    case "set":
+    case "cycle":
+      return "change";
+    default:
+      return assertNever(source);
+  }
+}
+
+function shutdownIntent(
+  reason: EventFor<"session_shutdown">["reason"],
+): TriggerFor<"session-shutdown">["intent"] {
+  switch (reason) {
+    case "reload":
+      return "reload";
+    case "quit":
+    case "new":
+    case "resume":
+    case "fork":
+      return "other";
+    default:
+      return assertNever(reason);
+  }
+}
+
+function registerHandlers(pi: ExtensionAPI, policy: DraftRestorationPolicy): void {
   for (const shortcut of loadShortcuts()) {
     pi.registerShortcut(shortcut as Shortcut, {
       description: "Stash or restore a prompt draft",
-      handler: (ctx) => stashOrRestore(state, ctx),
+      handler: policy.stashOrRestore,
     });
   }
 
   pi.on("session_start", (_event, ctx) => {
-    updateFooter(state, ctx);
+    policy.refreshFooter(ctx);
   });
 
   pi.on("input", (event, ctx) => {
-    if (event.source === "interactive") {
-      restore(state, ctx);
-    }
+    policy.considerRestoration(
+      { kind: "prompt-submitted", origin: inputOrigin(event.source) },
+      ctx,
+    );
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
-    restore(state, ctx);
+    policy.considerRestoration({ kind: "agent-starting" }, ctx);
   });
 
   pi.on("session_before_compact", (event, ctx) => {
-    if (event.reason === "manual") {
-      restore(state, ctx);
-    }
+    policy.considerRestoration(
+      { kind: "compaction", initiation: compactionInitiation(event.reason) },
+      ctx,
+    );
   });
 
   pi.on("model_select", (event, ctx) => {
-    if (event.source !== "restore") {
-      restore(state, ctx);
-    }
+    policy.considerRestoration(
+      { kind: "model-selection", phase: modelSelectionPhase(event.source) },
+      ctx,
+    );
   });
 
   pi.on("session_shutdown", (event, ctx) => {
-    if (event.reason === "reload") {
-      restore(state, ctx);
-    }
+    policy.considerRestoration(
+      { kind: "session-shutdown", intent: shutdownIntent(event.reason) },
+      ctx,
+    );
   });
 }
 
@@ -108,5 +131,6 @@ export default function pensieve(pi: ExtensionAPI): void {
   }
   installablePi[INSTALLED_KEY] = true;
 
-  registerHandlers(pi, getPensieveState());
+  const policy = createDraftRestorationPolicy(getPensieveState());
+  registerHandlers(pi, policy);
 }

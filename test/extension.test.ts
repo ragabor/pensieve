@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import pensieve from "../index.ts";
-import { draftCount, getPensieveState, peekDraft, pushDraft } from "../src/state.ts";
+import { getPensieveState } from "../src/state.ts";
 
 type PensieveEventType =
   | "session_start"
@@ -18,9 +18,7 @@ type PensieveEventType =
   | "before_agent_start"
   | "session_before_compact"
   | "model_select"
-  | "session_shutdown"
-  | "session_before_switch"
-  | "session_before_fork";
+  | "session_shutdown";
 type PensieveEvent = Extract<ExtensionEvent, { type: PensieveEventType }>;
 type EventFor<T extends PensieveEventType> = Extract<PensieveEvent, { type: T }>;
 type EventHandler<T extends PensieveEventType> = (
@@ -65,25 +63,19 @@ class FakePi {
 interface TestContext {
   readonly ctx: ExtensionContext;
   editorText: string;
-  failNextEditorSet: boolean;
   readonly statuses: Array<{ key: string; text: string | undefined }>;
 }
 
-function createContext(initialText = "", mode: ExtensionContext["mode"] = "tui"): TestContext {
+function createContext(initialText = ""): TestContext {
   let editorText = initialText;
-  let failNextEditorSet = false;
   const statuses: Array<{ key: string; text: string | undefined }> = [];
 
-  const result: TestContext = {
+  return {
     ctx: {
-      mode,
+      mode: "tui",
       ui: {
         getEditorText: () => editorText,
         setEditorText: (text: string) => {
-          if (failNextEditorSet) {
-            failNextEditorSet = false;
-            throw new Error("editor unavailable");
-          }
           editorText = text;
         },
         setStatus: (key: string, text: string | undefined) => {
@@ -98,16 +90,8 @@ function createContext(initialText = "", mode: ExtensionContext["mode"] = "tui")
     set editorText(text: string) {
       editorText = text;
     },
-    get failNextEditorSet() {
-      return failNextEditorSet;
-    },
-    set failNextEditorSet(value: boolean) {
-      failNextEditorSet = value;
-    },
     statuses,
   };
-
-  return result;
 }
 
 function install(pi: FakePi): void {
@@ -119,11 +103,11 @@ function latestStatus(context: TestContext): string | undefined {
 }
 
 function inputEvent(
-  source: EventFor<"input">["source"] = "interactive",
+  source: EventFor<"input">["source"],
   streamingBehavior?: EventFor<"input">["streamingBehavior"],
 ): EventFor<"input"> {
-  const base = { type: "input" as const, text: "submitted", source };
-  return streamingBehavior === undefined ? base : { ...base, streamingBehavior };
+  const event = { type: "input" as const, text: "submitted", source };
+  return streamingBehavior === undefined ? event : { ...event, streamingBehavior };
 }
 
 function beforeAgentStartEvent(): EventFor<"before_agent_start"> {
@@ -155,20 +139,6 @@ function modelSelectEvent(source: EventFor<"model_select">["source"]): EventFor<
     previousModel: undefined,
     source,
   };
-}
-
-async function expectFailure(action: Promise<void>, message: string): Promise<void> {
-  try {
-    await action;
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error);
-    if (error instanceof Error) {
-      expect(error.message).toBe(message);
-    }
-    return;
-  }
-
-  throw new Error("Expected action to fail");
 }
 
 let agentDir: string;
@@ -222,226 +192,90 @@ describe("registration", () => {
     expect(pi.eventHandlers.get("input")).toHaveLength(1);
   });
 
-  test("registers on a replacement runtime while retaining process state", async () => {
+  test("creates a replacement policy while retaining process state", async () => {
     const firstPi = new FakePi();
     const firstContext = createContext("draft");
     install(firstPi);
     await firstPi.press("ctrl+s", firstContext.ctx);
 
-    const reloadedPi = new FakePi();
-    const reloadedContext = createContext();
-    install(reloadedPi);
-    await reloadedPi.emit({ type: "session_start", reason: "reload" }, reloadedContext.ctx);
+    const replacementPi = new FakePi();
+    const replacementContext = createContext();
+    install(replacementPi);
+    await replacementPi.emit({ type: "session_start", reason: "reload" }, replacementContext.ctx);
 
-    expect(reloadedPi.shortcuts.size).toBe(1);
-    expect(latestStatus(reloadedContext)).toBe("stashed: draft");
-    await reloadedPi.press("ctrl+s", reloadedContext.ctx);
-    expect(reloadedContext.editorText).toBe("draft");
+    expect(latestStatus(replacementContext)).toBe("stashed: draft");
+    await replacementPi.press("ctrl+s", replacementContext.ctx);
+    expect(replacementContext.editorText).toBe("draft");
   });
 });
 
-describe("shortcut behavior", () => {
-  test("clears the editor, preserves exact text, and updates status", async () => {
-    const pi = new FakePi();
-    const context = createContext("  exact\ntext  ");
-    install(pi);
+describe("Pi event translation", () => {
+  test("translates every input source and streaming behavior", async () => {
+    for (const source of ["interactive", "rpc", "extension"] as const) {
+      for (const streamingBehavior of [undefined, "steer", "followUp"] as const) {
+        getPensieveState().drafts.length = 0;
+        const pi = new FakePi();
+        const context = createContext("draft");
+        install(pi);
+        await pi.press("ctrl+s", context.ctx);
 
-    await pi.press("ctrl+s", context.ctx);
+        await pi.emit(inputEvent(source, streamingBehavior), context.ctx);
 
-    expect(context.editorText).toBe("");
-    expect(peekDraft(getPensieveState())).toBe("  exact\ntext  ");
-    expect(latestStatus(context)).toBe("stashed: exact");
+        expect(context.editorText).toBe(source === "interactive" ? "draft" : "");
+      }
+    }
   });
 
-  test("restores the newest draft when the editor is whitespace-only", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "first");
-    pushDraft(getPensieveState(), "newest");
-    context.editorText = " \n\t";
-
-    await pi.press("ctrl+s", context.ctx);
-
-    expect(context.editorText).toBe("newest");
-    expect(peekDraft(getPensieveState())).toBe("first");
-    expect(latestStatus(context)).toBe("stashed: first");
-  });
-
-  test("keeps the draft when restoration fails", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
-    context.failNextEditorSet = true;
-
-    await expectFailure(pi.press("ctrl+s", context.ctx), "editor unavailable");
-
-    expect(peekDraft(getPensieveState())).toBe("draft");
-  });
-
-  test("does not push when clearing the editor fails", async () => {
+  test("translates agent start into an eligible Restoration trigger", async () => {
     const pi = new FakePi();
     const context = createContext("draft");
     install(pi);
-    context.failNextEditorSet = true;
-
-    await expectFailure(pi.press("ctrl+s", context.ctx), "editor unavailable");
-
-    expect(context.editorText).toBe("draft");
-    expect(draftCount(getPensieveState())).toBe(0);
-  });
-
-  test("does nothing outside TUI mode", async () => {
-    const pi = new FakePi();
-    const context = createContext("draft", "rpc");
-    install(pi);
-
     await pi.press("ctrl+s", context.ctx);
 
-    expect(context.editorText).toBe("draft");
-    expect(draftCount(getPensieveState())).toBe(0);
-    expect(context.statuses).toBeEmpty();
-  });
-});
-
-describe("automatic restoration", () => {
-  test.each([undefined, "steer", "followUp"] as const)(
-    "restores after interactive input with behavior %s",
-    async (streamingBehavior) => {
-      const pi = new FakePi();
-      const context = createContext();
-      install(pi);
-      pushDraft(getPensieveState(), "draft");
-      await pi.emit(inputEvent("interactive", streamingBehavior), context.ctx);
-
-      expect(context.editorText).toBe("draft");
-      expect(draftCount(getPensieveState())).toBe(0);
-    },
-  );
-
-  test("ignores RPC and extension-originated input", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
-
-    await pi.emit(inputEvent("rpc"), context.ctx);
-    await pi.emit(inputEvent("extension"), context.ctx);
-
-    expect(context.editorText).toBe("");
-    expect(peekDraft(getPensieveState())).toBe("draft");
-  });
-
-  test("unwinds nested drafts in LIFO order", async () => {
-    const pi = new FakePi();
-    const context = createContext("outer");
-    install(pi);
-    await pi.press("ctrl+s", context.ctx);
-    context.editorText = "inner";
-    await pi.press("ctrl+s", context.ctx);
-
-    await pi.emit(inputEvent(), context.ctx);
-    expect(context.editorText).toBe("inner");
-    expect(peekDraft(getPensieveState())).toBe("outer");
-
-    context.editorText = "";
-    await pi.emit(inputEvent(), context.ctx);
-    expect(context.editorText).toBe("outer");
-    expect(draftCount(getPensieveState())).toBe(0);
-  });
-
-  test("restores one draft when Pi emits both submission events", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "outer");
-    pushDraft(getPensieveState(), "inner");
-
-    await pi.emit(inputEvent(), context.ctx);
     await pi.emit(beforeAgentStartEvent(), context.ctx);
 
-    expect(context.editorText).toBe("inner");
-    expect(peekDraft(getPensieveState())).toBe("outer");
-  });
-
-  test("never overwrites a nonempty editor", async () => {
-    const pi = new FakePi();
-    const context = createContext("current work");
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
-
-    await pi.emit(inputEvent(), context.ctx);
-
-    expect(context.editorText).toBe("current work");
-    expect(peekDraft(getPensieveState())).toBe("draft");
-  });
-});
-
-describe("command and session lifecycle", () => {
-  test("restores for manual compaction but not automatic compaction", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
-
-    await pi.emit(compactEvent("threshold"), context.ctx);
-    expect(context.editorText).toBe("");
-    await pi.emit(compactEvent("manual"), context.ctx);
-
     expect(context.editorText).toBe("draft");
   });
 
-  test("ignores the startup model event, then restores after /model", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
+  test("translates every compaction reason", async () => {
+    for (const reason of ["manual", "threshold", "overflow"] as const) {
+      getPensieveState().drafts.length = 0;
+      const pi = new FakePi();
+      const context = createContext("draft");
+      install(pi);
+      await pi.press("ctrl+s", context.ctx);
 
-    await pi.emit(modelSelectEvent("restore"), context.ctx);
-    expect(context.editorText).toBe("");
-    await pi.emit(modelSelectEvent("set"), context.ctx);
+      await pi.emit(compactEvent(reason), context.ctx);
 
-    expect(context.editorText).toBe("draft");
-  });
-
-  test("restores before reload but not session replacement or exit", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
-
-    for (const reason of ["new", "resume", "fork", "quit"] as const) {
-      await pi.emit({ type: "session_shutdown", reason }, context.ctx);
+      expect(context.editorText).toBe(reason === "manual" ? "draft" : "");
     }
-    expect(context.editorText).toBe("");
-    await pi.emit({ type: "session_shutdown", reason: "reload" }, context.ctx);
-
-    expect(context.editorText).toBe("draft");
   });
 
-  test("session navigation leaves the stack pending", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
+  test("translates every model-selection source", async () => {
+    for (const source of ["set", "cycle", "restore"] as const) {
+      getPensieveState().drafts.length = 0;
+      const pi = new FakePi();
+      const context = createContext("draft");
+      install(pi);
+      await pi.press("ctrl+s", context.ctx);
 
-    await pi.emit({ type: "session_before_switch", reason: "new" }, context.ctx);
-    await pi.emit({ type: "session_before_fork", entryId: "entry", position: "at" }, context.ctx);
+      await pi.emit(modelSelectEvent(source), context.ctx);
 
-    expect(context.editorText).toBe("");
-    expect(peekDraft(getPensieveState())).toBe("draft");
+      expect(context.editorText).toBe(source === "restore" ? "" : "draft");
+    }
   });
 
-  test("session start refreshes status without popping", async () => {
-    const pi = new FakePi();
-    const context = createContext();
-    install(pi);
-    pushDraft(getPensieveState(), "draft");
+  test("translates every shutdown reason", async () => {
+    for (const reason of ["quit", "reload", "new", "resume", "fork"] as const) {
+      getPensieveState().drafts.length = 0;
+      const pi = new FakePi();
+      const context = createContext("draft");
+      install(pi);
+      await pi.press("ctrl+s", context.ctx);
 
-    await pi.emit({ type: "session_start", reason: "resume" }, context.ctx);
+      await pi.emit({ type: "session_shutdown", reason }, context.ctx);
 
-    expect(latestStatus(context)).toBe("stashed: draft");
-    expect(peekDraft(getPensieveState())).toBe("draft");
+      expect(context.editorText).toBe(reason === "reload" ? "draft" : "");
+    }
   });
 });
