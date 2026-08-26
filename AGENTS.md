@@ -16,3 +16,17 @@ in-memory LIFO stack.
 
 Run `bun run check` after code changes. Keep tests beside every change to stack, lifecycle,
 configuration, or footer semantics.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five canonical label names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
