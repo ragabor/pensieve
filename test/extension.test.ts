@@ -110,9 +110,10 @@ function inputEvent(
   return streamingBehavior === undefined ? event : { ...event, streamingBehavior };
 }
 
-function beforeAgentStartEvent(): EventFor<"before_agent_start"> {
+function beforeAgentStartEvent(): EventFor<"before_agent_start"> & { messageType: "user" } {
   return {
     type: "before_agent_start",
+    messageType: "user",
     prompt: "submitted",
     systemPrompt: "system",
     systemPromptOptions: {} as EventFor<"before_agent_start">["systemPromptOptions"],
